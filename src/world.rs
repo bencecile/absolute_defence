@@ -1,13 +1,37 @@
-use crate::math::{
-    Direction, Position,
+mod commons;
+mod enemy;
+mod player;
+mod status_effects;
+pub use self::{
+    enemy::{Enemy, EnemyType},
+    player::{Player},
 };
 
-#[derive(Default)]
+use fixedbitset::{FixedBitSet};
+
+use crate::math::{
+    probablility::{RollTable},
+};
+
 pub struct World {
     pub player: Player,
     pub enemies: Vec<Enemy>,
+    enemy_spawn_table: RollTable<EnemyType>,
+    max_enemies: usize,
+    // TODO Maybe set up the possibly to include modifiers to the spawned enemies stats. The definition for these modifiers should probably be in the World, but should be able to be applied to the spawned enemies.
+    // TODO Have a spawn timer. Maybe max allowed enemies spawned. Might want to use a real Distribution for enemy spawn timing
+    // TODO Spawn enemies at a set radius from the player
 }
 impl World {
+    pub fn new(enemy_spawn_table: RollTable<EnemyType>) -> World {
+        World {
+            player: Player::default(),
+            enemies: Vec::new(),
+            enemy_spawn_table,
+            max_enemies: 2,
+        }
+    }
+
     pub fn is_enemy_attacking_player(&self) -> bool {
         let player_position = self.player.position();
         for enemy in &self.enemies {
@@ -17,128 +41,41 @@ impl World {
         }
         false
     }
-}
 
-// TODO Keep track of a list of health sources so we can easily re-calculate (and display) the max
-// TODO Other sources for all stats as well (even movement speed)
-pub struct Player {
-    move_status: MovementStatus,
-    max_hp: f64,
-    /// Amount of HP lost so far
-    lost_hp: f64,
-}
-impl Player {
-    pub fn current_hp(&self) -> f64 { self.max_hp - self.lost_hp }
+    // Returns the bitset of attacking enemies with the optional index of the closest enemy
+    pub fn determine_attacking_enemies(&self) -> (FixedBitSet, Option<usize>) {
+        let mut attacking_enemies = FixedBitSet::with_capacity(self.world.enemies.len());
+        let mut closest_enemy: Option<(usize, f64)> = None;
+        let player_position = self.world.player.position();
 
-    pub fn apply_damage(&mut self, damage: f64) {
-        self.lost_hp += damage;
-    }
-}
-impl Default for Player {
-    fn default() -> Player {
-        Player {
-            max_hp: 100.0,
-            lost_hp: 0.0,
-            move_status: MovementStatus::new(
-                Position::new(0.0, 0.0),
-                0.5,
-                Direction::new(0.0, 1.0)
-            ),
+        for (i, enemy) in self.world.enemies.iter_mut().enumerate() {
+            if enemy.is_in_range(player_position) {
+                attacking_enemies.insert(i);
+                let new_closest_enemy = {
+                    if let Some( (closest_index, closest_range) ) = closest_enemy.take() {
+                        if enemy.attack_range() < closest_range {
+                            (i, enemy.attack_range())
+                        } else {
+                            (closest_index, closest_range)
+                        }
+                    } else {
+                        (i, enemy.attack_range())
+                    }
+                };
+                closest_enemy = Some(new_closest_enemy);
+            }
         }
-    }
-}
-impl Player {
-    pub fn position(&self) -> Position {
-        self.move_status.position()
-    }
-    pub fn update_movement(&mut self, time_delta: f64) {
-        self.move_status.update(time_delta);
-    }
-    pub fn turn_towards(&mut self, target: Position) {
-        self.move_status.turn_towards(target);
-    }
-}
-
-pub struct Enemy {
-    move_status: MovementStatus,
-    damage: f64,
-    attacks_left: u64,
-    /// In seconds between attacks
-    attack_speed: f64,
-    /// In seconds
-    time_since_last_attack: f64,
-    /// In world units
-    attack_range: f64,
-}
-impl Enemy {
-    pub fn is_in_range(&self, target: Position) -> bool {
-        self.position().distance_to(target) < self.attack_range
+        (attacking_enemies, closest_enemy.map(|(i, _)| i))
     }
 
-    pub fn attack(&mut self, time_delta: f64, player: &mut Player) {
-        let total_time = self.time_since_last_attack + time_delta;
-        let total_attacks = total_time / self.attack_speed;
-        let attacks_to_do = total_attacks.trunc();
-        // Keep track of any leftover time
-        self.time_since_last_attack = total_time - (attacks_to_do * self.attack_speed);
+    pub fn try_spawn_enemy(&mut self) {
+        if self.enemies.len() < self.max_enemies {
+            // TODO Have another roll to see if we spawn an enemy (exponential distribution)
+            let enemy_type = self.enemy_spawn_table.roll();
 
-        for _ in 0..(total_attacks as u64) {
-            player.apply_damage(self.damage);
-            self.attacks_left = self.attacks_left.saturating_sub(1);
+            
+            // TODO Randomly make the position some radius from the player (maybe 10?)
+            // TODO Find the direction to the player from that
         }
-    }
-}
-impl Enemy {
-    pub fn position(&self) -> Position {
-        self.move_status.position()
-    }
-    pub fn update_movement(&mut self, time_delta: f64) {
-        self.move_status.update(time_delta);
-    }
-    pub fn turn_towards(&mut self, target: Position) {
-        self.move_status.turn_towards(target);
-    }
-}
-
-#[derive(Copy, Clone)]
-pub enum EnemyType {
-    Slime,
-}
-impl EnemyType {
-    pub fn spawn(self, position: Position, direction: Direction) -> Enemy {
-        match self {
-            Self::Slime => Enemy {
-                move_status: MovementStatus::new(position, 1.5, direction),
-                damage: 5.0,
-                attacks_left: 3,
-                attack_speed: 1.25,
-                time_since_last_attack: 0.0,
-                attack_range: 0.2,
-            },
-        }
-    }
-}
-
-struct MovementStatus {
-    /// The x and y position
-    position: Position,
-    /// The number of units they will move in a single second
-    speed: f64,
-    /// The x and y direction
-    direction: Direction,
-}
-impl MovementStatus {
-    fn new(position: Position, speed: f64, direction: Direction) -> MovementStatus {
-        MovementStatus { position, speed, direction }
-    }
-    fn position(&self) -> Position { self.position }
-
-    fn turn_towards(&mut self, target: Position) {
-        self.direction = self.position.direction_to(target);
-    }
-
-    fn update(&mut self, time_delta: f64) {
-        let space_moved = self.direction * (self.speed * time_delta);
-        self.position += space_moved;
     }
 }

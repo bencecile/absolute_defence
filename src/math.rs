@@ -1,8 +1,14 @@
+pub mod probability;
+
 use std::{
     ops::{
         Add, AddAssign, Mul,
     },
 };
+
+pub fn f64_equal(num1: f64, num2: f64) -> bool {
+    (num1 - num2).abs() < 1e-10
+}
 
 #[derive(Copy, Clone)]
 pub struct Position(f64, f64);
@@ -15,7 +21,7 @@ impl Position {
         diff_x.hypot(diff_y)
     }
     pub fn direction_to(self, other: Position) -> Direction {
-        Direction::new(other.0 - self.0, other.1 - self.1)
+        Direction::normalize_vector(other.0 - self.0, other.1 - self.1)
     }
 }
 impl Add<Position> for Position {
@@ -32,8 +38,20 @@ impl AddAssign<Position> for Position {
 #[derive(Copy, Clone)]
 pub struct Direction(f64, f64);
 impl Direction {
-    /// Normalizes the direction first
-    pub fn new(x: f64, y: f64) -> Direction {
+    /// Takes an angle from the horizontal axis, counter-clockwise.
+    /// Radian / 2 is 90 degrees pointing up (+y)
+    pub fn from_angle(radians: f64) -> Direction {
+        // TODO Do this properly
+    }
+
+    /// Reverses the direction to point opposite.
+    pub fn reverse(&mut self) {
+        self.0 = -self.0;
+        self.1 = -self.1;
+    }
+}
+impl Direction {
+    fn normalize_vector(x: f64, y: f64) -> Direction {
         let total = x + y;
         Direction(x / total, y / total)
     }
